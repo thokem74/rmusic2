@@ -251,9 +251,11 @@ implementation defaults. Acceptance criteria above capture the resulting behavio
 The user subsequently selected UX prototype A, Station ledger; that layout decision
 is recorded above with a reference to the archived prototype comparison.
 
-No unresolved product decisions were identified in this review. Dependency versions,
-exact player event mappings, and platform mechanisms must still be verified during
-future implementation; this document does not claim they have been tested.
+No unresolved product decisions were identified in the design review. Dependency
+versions are now locked, and the implementation has application-level tests plus
+real-player and terminal smoke checks. See the
+[implementation review and validation](implementation-review.md) for their scope,
+results, and remaining live-audio verification limits.
 
 The specification is published as [GitHub issue #1](https://github.com/thokem74/rmusic2/issues/1),
 with the `ready-for-agent` label. It synthesizes this design into 63 user stories and

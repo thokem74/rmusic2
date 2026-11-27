@@ -115,3 +115,5 @@ the terminal check uses isolated temporary state and pseudo-terminals.
 
 The agreed scope and acceptance criteria are in [the design](docs/design.md), with
 the published specification in [issue #1](https://github.com/thokem74/rmusic2/issues/1).
+Review findings, resolutions, and verification results are recorded in the
+[implementation review](docs/implementation-review.md).
