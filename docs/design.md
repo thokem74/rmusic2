@@ -255,6 +255,13 @@ No unresolved product decisions were identified in this review. Dependency versi
 exact player event mappings, and platform mechanisms must still be verified during
 future implementation; this document does not claim they have been tested.
 
-This document is ready as input for specification. The user has explicitly instructed
-that implementation must not start yet. No separate specification or implementation
-has been created.
+The specification is published as [GitHub issue #1](https://github.com/thokem74/rmusic2/issues/1),
+with the `ready-for-agent` label. It synthesizes this design into 63 user stories and
+preserves all 28 acceptance scenarios.
+
+The user confirmed one primary application-level testing boundary with controlled
+directory/player responses and time, real temporary-file persistence checks, and a
+small real terminal/mpv smoke check. The published specification records that decision.
+
+The user has explicitly instructed that implementation must not start yet. The issue
+and its readiness label do not lift that hold. No Rust implementation has been created.
