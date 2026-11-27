@@ -48,8 +48,8 @@
 ## Selected UX: A — Station ledger
 
 The user selected variant A from the five throwaway UX prototypes. This is the
-layout direction for future specification and implementation; implementation remains
-explicitly on hold.
+layout direction for specification and implementation. The user subsequently
+authorized implementation by invoking `$implement thokem74/rmusic2#1`.
 
 - Place Favorites/Search tabs at the top, with the search filter form below them
   when open.
@@ -81,8 +81,8 @@ implementation must follow this design rather than promote throwaway HTML code.
 
 ## Confirmed implementation defaults
 
-These defaults were confirmed during the design interview. Their confirmation does
-not authorize implementation; the explicit implementation hold remains in effect.
+These defaults were confirmed during the design interview. The user subsequently
+authorized implementation through `$implement thokem74/rmusic2#1`.
 
 ### Interface and state
 
@@ -263,5 +263,6 @@ The user confirmed one primary application-level testing boundary with controlle
 directory/player responses and time, real temporary-file persistence checks, and a
 small real terminal/mpv smoke check. The published specification records that decision.
 
-The user has explicitly instructed that implementation must not start yet. The issue
-and its readiness label do not lift that hold. No Rust implementation has been created.
+The earlier implementation hold was lifted by the user's explicit
+`$implement thokem74/rmusic2#1` request. The specification's hold language records
+the authorization status at publication; this later request authorizes the work.

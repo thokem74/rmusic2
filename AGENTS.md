@@ -12,8 +12,6 @@ and naming. The workflow and engineering rules below are repository policy.
 - Respect the configured Rust edition, minimum supported Rust version (MSRV),
   toolchain, features, and lint settings. When none exist, use stable Rust;
   introduce toolchain or edition changes only when the task requires them.
-- This repository has no Cargo manifest yet. Apply Cargo checks once a Rust
-  package exists; creating this instructions file does not require scaffolding one.
 
 ## Formatting
 

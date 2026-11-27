@@ -1,0 +1,24 @@
+[package]
+name = "rmusic"
+version = "0.1.0"
+edition = "2024"
+description = "A keyboard-driven internet radio player for the Linux terminal"
+repository = "https://github.com/thokem74/rmusic2"
+
+[dependencies]
+anyhow = "1"
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures-util = "0.3"
+hickory-resolver = "0.25"
+nix = { version = "0.31", features = ["signal", "process", "user"] }
+rand = "0.9"
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+strip-ansi-escapes = "0.2"
+tempfile = "3"
+tokio = { version = "1", features = ["full"] }
+
+[lints.rust]
+unsafe_code = "forbid"
