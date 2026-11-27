@@ -81,3 +81,20 @@ cargo test --workspace
   Enable all features together only when they are compatible.
 - Before finishing, inspect the diff and report checks run, their outcomes, and
   any checks that could not run with the reason.
+
+## Agent skills
+
+### Issue tracker
+
+Before reading, creating, or updating issues and specs, read
+`docs/agents/issue-tracker.md`. This repo uses GitHub Issues.
+
+### Triage labels
+
+Before assigning triage roles, read `docs/agents/triage-labels.md`
+for the configured label names.
+
+### Domain docs
+
+Before exploring domain behavior or proposing changes, read
+`docs/agents/domain.md`. This repo uses a single-context layout.
