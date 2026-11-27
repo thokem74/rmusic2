@@ -16,6 +16,14 @@ the station a different station.
 A station the listener has saved for easy access later.
 _Avoid_: Bookmark, playlist entry
 
+**Highlighted station**:
+The station currently targeted while browsing favorites or search results. It can
+be different from the station being heard.
+
+**Playing station**:
+The station whose live audio is currently being played. Highlighting another station
+does not change the playing station.
+
 **Track metadata**:
 Information supplied by a station about what is currently playing, when available.
 _Avoid_: Guaranteed song identification

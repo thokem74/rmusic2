@@ -45,6 +45,40 @@
   does not block playback. Document that the service receives the station choice
   and the client's IP address.
 
+## Selected UX: A — Station ledger
+
+The user selected variant A from the five throwaway UX prototypes. This is the
+layout direction for future specification and implementation; implementation remains
+explicitly on hold.
+
+- Place Favorites/Search tabs at the top, with the search filter form below them
+  when open.
+- Use a dense station table on the left. Show station name, favorite/playing
+  markers, country, bitrate, tag, and 24-hour clicks where space permits. Favorite
+  order and search ordering retain their previously confirmed behavior.
+- Place a highlighted-station inspector on the right, showing name, country,
+  language, codec, bitrate, tag, popularity, and the play/save actions.
+- Keep a persistent player bar below the table and inspector, showing playback
+  status, the playing or last station, available track metadata, and app volume.
+  Clearly distinguish a stopped last station from an actively playing station.
+- Keep the keyboard shortcut guide at the bottom. Highlighting a row updates the
+  inspector; it does not change playback. Enter plays the highlighted station, and
+  `f` saves/removes that station. The player bar refers to the playing or last station
+  independently of the highlighted row.
+- At the supported minimum of 80×24, keep the table, inspector, player status, and
+  essential controls usable, reducing optional table columns as needed. Below the
+  minimum, retain the already agreed resize-message behavior.
+
+The selection settles the layout question; it does not establish that terminal
+fit or interaction behavior has been tested in a real TUI. Browser-specific mockup
+behavior, simulated timing, exact pixel styling, the variant switcher, scenario
+controls, and state inspector are prototype aids, not application requirements.
+
+The full five-variant primary source and the selection verdict are archived on the
+local branch `prototype/rmusic-ux-five-variants`, commit `ab31fda1dc6c`, at
+`docs/rmusic-ux-prototype.html`. This branch is a reference artifact; future Rust
+implementation must follow this design rather than promote throwaway HTML code.
+
 ## Confirmed implementation defaults
 
 These defaults were confirmed during the design interview. Their confirmation does
@@ -172,6 +206,8 @@ specification or authorize implementation.
 
 | Scenario | Expected result |
 | --- | --- |
+| Open Favorites or Search at a supported terminal size | Use layout A: tabs above a station table and highlighted-station inspector, with a persistent player bar and shortcut guide below. |
+| Highlight another station while audio plays | Update the row highlight and inspector; keep the player bar attached to the playing station and leave audio unchanged. |
 | Start with valid saved state | Favorites retain insertion order, saved volume and last-station context return, and no audio starts. |
 | Enter a search while audio plays | Submitted filters combine with AND, broken stations are hidden by default, and audio continues. |
 | Browse an empty query | Results are paginated in groups of 50 and ordered by descending 24-hour click count. |
@@ -212,6 +248,8 @@ specification or authorize implementation.
 Shared understanding of the product scope is confirmed. The subsequent gap review
 and the user's answers to Q18–Q26 resolved the recorded gaps and confirmed the
 implementation defaults. Acceptance criteria above capture the resulting behavior.
+The user subsequently selected UX prototype A, Station ledger; that layout decision
+is recorded above with a reference to the archived prototype comparison.
 
 No unresolved product decisions were identified in this review. Dependency versions,
 exact player event mappings, and platform mechanisms must still be verified during
