@@ -722,6 +722,75 @@ fn station_change_ignores_old_metadata_and_suspend_cancels_playback() {
     assert!(app.tick(100_000).is_empty());
 }
 
+#[test]
+fn long_station_names_never_hide_status_or_volume_at_minimum_size() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let mut last = station("a");
+    last.name = "A".repeat(100);
+    let app = App::new(
+        SavedState {
+            last_station: Some(last),
+            volume: 75,
+            ..SavedState::default()
+        },
+        None,
+    );
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    terminal
+        .draw(|frame| crate::ui::render(frame, &app))
+        .unwrap();
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(text.contains("Stopped"));
+    assert!(
+        text.contains("Volume 75%"),
+        "volume was clipped by station name"
+    );
+}
+
+#[test]
+fn elapsed_time_without_audio_progress_does_not_replenish_the_retry_budget() {
+    let mut app = App::new(
+        SavedState {
+            favorites: vec![station("a")],
+            ..SavedState::default()
+        },
+        None,
+    );
+    app.update(Action::Play, 0);
+    app.complete(
+        Event::Player {
+            generation: app.generation(),
+            event: PlayerEvent::Failed("drop".into()),
+        },
+        0,
+    );
+    app.tick(1000);
+    app.complete(
+        Event::Player {
+            generation: app.generation(),
+            event: PlayerEvent::Ready,
+        },
+        1000,
+    );
+    app.tick(31_000);
+    assert_eq!(app.playback, Playback::Retrying);
+    assert!(
+        app.tick(32_000).is_empty(),
+        "stalled audio incorrectly reset the retry budget"
+    );
+    assert!(
+        app.tick(33_000)
+            .iter()
+            .any(|effect| matches!(effect, Effect::Start { .. }))
+    );
+}
+
 #[tokio::test]
 #[ignore = "requires installed mpv; run explicitly for the real player smoke check"]
 async fn real_mpv_plays_local_audio_and_is_reaped_on_stop() {

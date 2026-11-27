@@ -16,6 +16,45 @@ pub(crate) struct Query {
     pub hide_broken: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SearchField {
+    Name,
+    Country,
+    Language,
+    Tag,
+    HideBroken,
+}
+
+impl SearchField {
+    pub const ALL: [Self; 5] = [
+        Self::Name,
+        Self::Country,
+        Self::Language,
+        Self::Tag,
+        Self::HideBroken,
+    ];
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Name => Self::Country,
+            Self::Country => Self::Language,
+            Self::Language => Self::Tag,
+            Self::Tag => Self::HideBroken,
+            Self::HideBroken => Self::Name,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Name => "Name",
+            Self::Country => "Country code",
+            Self::Language => "Language",
+            Self::Tag => "Tag",
+            Self::HideBroken => "Hide broken",
+        }
+    }
+}
+
 impl Default for Query {
     fn default() -> Self {
         Self {
@@ -29,6 +68,26 @@ impl Default for Query {
 }
 
 impl Query {
+    pub fn text(&self, field: SearchField) -> Option<&str> {
+        match field {
+            SearchField::Name => Some(&self.name),
+            SearchField::Country => Some(&self.country),
+            SearchField::Language => Some(&self.language),
+            SearchField::Tag => Some(&self.tag),
+            SearchField::HideBroken => None,
+        }
+    }
+
+    pub fn text_mut(&mut self, field: SearchField) -> Option<&mut String> {
+        match field {
+            SearchField::Name => Some(&mut self.name),
+            SearchField::Country => Some(&mut self.country),
+            SearchField::Language => Some(&mut self.language),
+            SearchField::Tag => Some(&mut self.tag),
+            SearchField::HideBroken => None,
+        }
+    }
+
     pub fn label(&self) -> String {
         let values: Vec<_> = [&self.name, &self.country, &self.language, &self.tag]
             .into_iter()

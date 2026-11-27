@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::{
     app::{App, Playback, View},
-    model::display_text,
+    model::{SearchField, display_text},
 };
 
 fn panel(title: &str) -> Block<'_> {
@@ -101,23 +101,23 @@ pub(crate) fn render(frame: &mut Frame<'_>, app: &App) {
 }
 
 fn render_form(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    let values = [
-        format!("Name         {}", display_text(&app.draft.name)),
-        format!("Country code {}", display_text(&app.draft.country)),
-        format!("Language     {}", display_text(&app.draft.language)),
-        format!("Tag          {}", display_text(&app.draft.tag)),
-        format!(
-            "Hide broken  [{}]  Space toggles",
-            if app.draft.hide_broken { "x" } else { " " }
-        ),
-    ];
-    let mut lines: Vec<Line<'_>> = values
+    let mut lines: Vec<Line<'_>> = SearchField::ALL
         .into_iter()
-        .enumerate()
-        .map(|(i, value)| {
+        .map(|field| {
+            let value = match app.draft.text(field) {
+                Some(text) => display_text(text),
+                None => format!(
+                    "[{}]  Space toggles",
+                    if app.draft.hide_broken { "x" } else { " " }
+                ),
+            };
             Line::styled(
-                format!("{} {value}", if i == app.field { ">" } else { " " }),
-                if i == app.field {
+                format!(
+                    "{} {:12} {value}",
+                    if field == app.field { ">" } else { " " },
+                    field.label()
+                ),
+                if field == app.field {
                     Style::default().fg(Color::LightGreen)
                 } else {
                     Style::default()
@@ -267,24 +267,33 @@ fn render_player(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Playback::Retrying => "Retrying",
         Playback::Failed => "Failed",
     };
-    let text = vec![
-        Line::from(vec![
+    let block = panel(" Player · Space stop/reconnect ");
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+    let columns = Layout::horizontal([Constraint::Min(0), Constraint::Length(13)]).split(rows[0]);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
             Span::styled(
                 format!("{label} · "),
                 Style::default().fg(Color::LightGreen),
             ),
             Span::raw(station),
-            Span::raw(format!("  |  Volume {}%", app.saved.volume)),
-        ]),
-        Line::styled(
+        ])),
+        columns[0],
+    );
+    frame.render_widget(
+        Paragraph::new(format!("Volume {}%", app.saved.volume))
+            .alignment(ratatui::layout::Alignment::Right),
+        columns[1],
+    );
+    frame.render_widget(
+        Paragraph::new(Line::styled(
             app.metadata
                 .as_deref()
                 .unwrap_or("Track information unavailable"),
             Style::default().fg(Color::Gray),
-        ),
-    ];
-    frame.render_widget(
-        Paragraph::new(text).block(panel(" Player · Space stop/reconnect ")),
-        area,
+        )),
+        rows[1],
     );
 }

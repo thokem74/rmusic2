@@ -1,4 +1,4 @@
-use crate::model::{Query, SavedState, Station, display_text};
+use crate::model::{Query, SavedState, SearchField, Station, display_text};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum View {
@@ -98,7 +98,7 @@ pub(crate) struct App {
     pub selected: usize,
     pub draft: Query,
     pub form_open: bool,
-    pub field: usize,
+    pub field: SearchField,
     pub results_query: Option<Query>,
     pub page: usize,
     pub loading: bool,
@@ -128,7 +128,7 @@ impl App {
             generation: 0,
             draft: Query::default(),
             form_open: false,
-            field: 0,
+            field: SearchField::Name,
             results_query: None,
             page: 0,
             loading: false,
@@ -186,37 +186,29 @@ impl App {
             Action::OpenSearch => {
                 self.view = View::Search;
                 self.form_open = true;
-                self.field = 0;
+                self.field = SearchField::Name;
                 Vec::new()
             }
             Action::Input(ch) => {
                 if self.form_open {
-                    match self.field {
-                        0 if self.draft.name.len() < 1024 => self.draft.name.push(ch),
-                        1 if self.draft.country.len() < 32 => self.draft.country.push(ch),
-                        2 if self.draft.language.len() < 1024 => self.draft.language.push(ch),
-                        3 if self.draft.tag.len() < 1024 => self.draft.tag.push(ch),
-                        4 if ch == ' ' => self.draft.hide_broken = !self.draft.hide_broken,
-                        _ => {}
+                    if let Some(text) = self.draft.text_mut(self.field) {
+                        if text.len() < 1024 {
+                            text.push(ch);
+                        }
+                    } else if ch == ' ' {
+                        self.draft.hide_broken = !self.draft.hide_broken;
                     }
                 }
                 Vec::new()
             }
             Action::Backspace => {
-                let field = match self.field {
-                    0 => Some(&mut self.draft.name),
-                    1 => Some(&mut self.draft.country),
-                    2 => Some(&mut self.draft.language),
-                    3 => Some(&mut self.draft.tag),
-                    _ => None,
-                };
-                if let Some(field) = field {
+                if let Some(field) = self.draft.text_mut(self.field) {
                     field.pop();
                 }
                 Vec::new()
             }
             Action::NextField => {
-                self.field = (self.field + 1) % 5;
+                self.field = self.field.next();
                 Vec::new()
             }
             Action::CloseOverlay => {
@@ -443,14 +435,6 @@ impl App {
     }
 
     pub fn tick(&mut self, now: u64) -> Vec<Effect> {
-        if self.playback == Playback::Playing
-            && self
-                .stable_since
-                .is_some_and(|start| now.saturating_sub(start) >= 30_000)
-        {
-            self.retries = 0;
-            self.stable_since = Some(now);
-        }
         if self.playback == Playback::Retrying && self.retry_at.is_some_and(|due| now >= due) {
             self.retry_at = None;
             self.generation += 1;
@@ -468,6 +452,16 @@ impl App {
             && now.saturating_sub(self.last_progress) >= 15_000
         {
             return self.fail("Connection timed out or stream stalled".into(), now);
+        }
+        // A delayed tick must detect a stall before counting elapsed wall time
+        // as stable playback and replenishing the retry budget.
+        if self.playback == Playback::Playing
+            && self
+                .stable_since
+                .is_some_and(|start| now.saturating_sub(start) >= 30_000)
+        {
+            self.retries = 0;
+            self.stable_since = Some(now);
         }
         Vec::new()
     }
