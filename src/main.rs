@@ -101,14 +101,14 @@ async fn run() -> Result<()> {
                 Flow::Continue => {}
                 Flow::Quit => return Ok(()),
                 Flow::Suspend => {
-                    drop(input);
+                    // All threads stop with the process. Keep one event stream:
+                    // replacing it can overlap the old reader worker's shutdown.
                     restore_terminal();
                     // SIGSTOP suspends even though SIGTSTP is observed by Tokio.
                     kill(getpid(), Signal::SIGSTOP)?;
                     terminal = setup_terminal()?;
                     let size = terminal.size()?;
                     runtime.app.update(Action::Resize(size.width, size.height), runtime.now());
-                    input = EventStream::new();
                 }
             }
         }

@@ -839,33 +839,40 @@ async fn real_mpv_plays_local_audio_and_is_reaped_on_stop() {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let mut player = crate::player::Player::with_program(wrapper);
     player.start(1, &url, 50, sender).await;
-    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let ready = tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
-            match receiver.recv().await.unwrap() {
-                Event::Player {
+            match receiver.recv().await {
+                Some(Event::Player {
                     event: PlayerEvent::Ready,
                     ..
-                } => break,
-                Event::Player {
+                }) => break Ok::<(), String>(()),
+                Some(Event::Player {
                     event: PlayerEvent::Failed(error),
                     ..
-                } => panic!("{error}"),
+                }) => break Err(error),
+                Some(Event::Player {
+                    event: PlayerEvent::Missing,
+                    ..
+                }) => break Err("mpv is missing".into()),
+                None => break Err("Player event channel closed before playback".into()),
                 _ => {}
             }
         }
     })
-    .await
-    .unwrap();
+    .await;
+    // Cleanup precedes assertions so a failed startup cannot skip shutdown.
+    player.volume(0);
+    player.stop().await;
+    audio.abort();
+    let _ = audio.await;
+    ready.expect("mpv startup deadline expired").unwrap();
     let pid: i32 = std::fs::read_to_string(pid_file)
         .unwrap()
         .trim()
         .parse()
         .unwrap();
-    player.volume(0);
-    player.stop().await;
     assert_eq!(
         nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), None),
         Err(nix::errno::Errno::ESRCH)
     );
-    audio.abort();
 }

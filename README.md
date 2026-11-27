@@ -113,24 +113,48 @@ The runner tests use temporary workspaces to reject real formatting, compilation
 Clippy-warning, and behavior-test failures. They also check missing-tool errors,
 failure propagation, workspace selection, and source/lockfile preservation. Python 3
 is needed for these runner tests; the Cargo check command itself only needs Bash
-and the Rust tools. Branch protection and additional process-smoke automation are
-separate from this CI guardrail.
+and the Rust tools. Branch protection remains a separate administrator decision.
 
 Tests exercise application actions and visible state with controlled responses and
 time, real temporary-file persistence, and localhost HTTP fixtures. They do not
 depend on public radio streams. The controlled HTTP/player checks need permission
 to create local sockets when run in a restricted sandbox.
 
-Additional real-process smoke checks (with mpv installed):
+Real-process smoke checks run in a separate Linux CI job on pushes and pull
+requests. That job installs mpv and Python, uses stable Rust, and runs the same
+entry point available locally:
 
 ```sh
-cargo test real_mpv_plays -- --ignored --nocapture
-cargo build --locked
-python3 scripts/smoke-terminal.py
+./scripts/smoke
 ```
 
-The player check uses generated silent audio on localhost and a null audio output;
-the terminal check uses isolated temporary state and pseudo-terminals.
+Requires Linux, Bash, Rust/Cargo, mpv, Python 3.11 or newer, and GNU coreutils.
+The command builds with `--locked`, explicitly runs only the named opt-in mpv test,
+and then checks the terminal lifecycle. A zero-test result is a failure, not a skip.
+The default `./scripts/check` still works without mpv; its test suite leaves this
+real-player check opt-in.
+
+The player check uses generated silent audio on localhost and a null audio output.
+The terminal check uses isolated temporary state and pseudo-terminals, verifying
+startup, literal shortcut text, resize, quit, suspension/resume, and handled signals.
+Neither needs Radio Browser, a public broadcast, physical speakers, or a desktop
+audio service. These checks do not establish that an audible output device works.
+
+Local commands are bounded: build up to 10 minutes, the player test up to 2 minutes,
+and the terminal script up to 1 minute, with a 5-second kill grace period. Each
+terminal condition has its own 5-second deadline. CI also bounds the whole smoke
+job and its steps. Failures retain the failed phase and diagnostics in command/CI
+output, and temporary logs, state, owned children, and PTYs are cleaned up.
+
+Reproduce the unattended failure-path tests separately:
+
+```sh
+python3 scripts/test_smoke.py
+```
+
+The smoke entry point uses Cargo's reported executable artifact, including custom
+target directories. For a specific locally built binary, the terminal check also
+accepts `--binary PATH` and `--timeout SECONDS`.
 
 The agreed scope and acceptance criteria are in [the design](docs/design.md), with
 the published specification in [issue #1](https://github.com/thokem74/rmusic2/issues/1).

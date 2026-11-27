@@ -26,3 +26,26 @@ jobs:
         run: python3 scripts/test_check.py
       - name: Run shared Cargo checks
         run: ./scripts/check
+
+  smoke:
+    name: Linux process smoke checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install stable Rust
+        run: rustup toolchain install stable --profile minimal
+      - name: Install smoke prerequisites
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends mpv python3
+      - name: Test unattended failure cleanup
+        timeout-minutes: 2
+        run: python3 scripts/test_smoke.py
+      - name: Run process smoke checks
+        timeout-minutes: 15
+        run: ./scripts/smoke

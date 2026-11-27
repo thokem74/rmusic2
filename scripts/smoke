@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+for tool in cargo mpv python3 timeout tee grep mktemp rm dirname uname; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        printf 'ERROR: required smoke tool missing: %s\n' "$tool" >&2
+        exit 127
+    fi
+done
+if [[ "$(uname -s)" != Linux ]]; then
+    printf 'ERROR: smoke checks require Linux.\n' >&2
+    exit 1
+fi
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+player_log=
+artifact_file=
+trap 'rm -f -- "$player_log" "$artifact_file"' EXIT
+player_log=$(mktemp)
+artifact_file=$(mktemp)
+
+run_phase() {
+    local phase="$1"
+    shift
+    printf '\n==> %s\n' "$phase"
+    if "$@"; then
+        return 0
+    else
+        local status=$?
+        printf 'FAILED: %s (exit %s)\n' "$phase" "$status" >&2
+        return "$status"
+    fi
+}
+
+run_phase build timeout --kill-after=5s 600s cargo build --locked --bin rmusic \
+    --message-format=json-render-diagnostics | python3 -c '
+import json, pathlib, sys
+for line in sys.stdin:
+    try:
+        message = json.loads(line)
+    except json.JSONDecodeError:
+        print(line, end="", file=sys.stderr)
+        continue
+    target = message.get("target", {})
+    if (message.get("reason") == "compiler-artifact" and target.get("name") == "rmusic"
+            and "bin" in target.get("kind", []) and message.get("executable")):
+        pathlib.Path(sys.argv[1]).write_text(message["executable"] + "\n")
+' "$artifact_file"
+if ! IFS= read -r binary < "$artifact_file" || [[ ! -x "$binary" ]]; then
+    printf 'FAILED: build did not identify an executable rmusic artifact.\n' >&2
+    exit 1
+fi
+run_phase player timeout --kill-after=5s 120s cargo test --locked --bin rmusic \
+    acceptance::real_mpv_plays_local_audio_and_is_reaped_on_stop \
+    -- --ignored --exact --nocapture --color never 2>&1 | tee "$player_log"
+# Cargo succeeds with zero matching tests; that must not silently skip this gate.
+if ! grep -Eq '^test result: ok\. 1 passed; 0 failed; 0 ignored;' "$player_log"; then
+    printf 'FAILED: required mpv smoke test did not run and pass exactly once.\n' >&2
+    exit 1
+fi
+run_phase terminal timeout --kill-after=5s 60s python3 scripts/smoke-terminal.py --binary "$binary"
+printf '\nPASSED: smoke checks\n'
