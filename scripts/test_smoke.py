@@ -9,6 +9,7 @@ import tempfile
 import unittest
 import json
 import shutil
+import time
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -171,6 +172,51 @@ class TerminalFailureTests(unittest.TestCase):
             "        os.write(1, b'Search filters')\n",
             "exit: timed out",
         )
+
+    def test_startup_failure_also_terminates_descendants_after_the_leader_exits(self):
+        with tempfile.TemporaryDirectory(prefix="rmusic-smoke-descendant-") as directory:
+            directory = Path(directory)
+            descendant_file = directory / "descendant.pid"
+            fixture = directory / "failed-parent"
+            fixture.write_text(
+                f"#!{sys.executable}\nimport os,pathlib,signal,time\n"
+                "signal.signal(signal.SIGHUP, signal.SIG_IGN)\n"
+                "child = os.fork()\n"
+                "if child == 0:\n    time.sleep(60)\n    os._exit(0)\n"
+                f"pathlib.Path({str(descendant_file)!r}).write_text(str(child))\n"
+                "raise SystemExit(23)\n"
+            )
+            fixture.chmod(0o755)
+            pid = None
+            try:
+                result = subprocess.run(
+                    [sys.executable, str(ROOT / "scripts/smoke-terminal.py"),
+                     "--binary", str(fixture), "--timeout", "1"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("startup frame", result.stderr)
+                pid = int(descendant_file.read_text())
+                status = Path(f"/proc/{pid}/stat")
+                deadline = time.monotonic() + 1
+                while time.monotonic() < deadline:
+                    try:
+                        if status.read_text().rsplit(")", 1)[1].split()[0] == "Z":
+                            break
+                    except FileNotFoundError:
+                        break
+                    time.sleep(0.01)
+                if status.exists():
+                    self.assertEqual(status.read_text().rsplit(")", 1)[1].split()[0], "Z",
+                                     "descendant was still running after startup cleanup")
+            finally:
+                if pid is None and descendant_file.exists():
+                    pid = int(descendant_file.read_text())
+                if pid is not None:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
 
 if __name__ == "__main__":

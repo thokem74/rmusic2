@@ -137,6 +137,9 @@ real-player check opt-in.
 The player check uses generated silent audio on localhost and a null audio output.
 The terminal check uses isolated temporary state and pseudo-terminals, verifying
 startup, literal shortcut text, resize, quit, suspension/resume, and handled signals.
+It also starts local playback and checks that quitting has reaped the real mpv
+before the fixture's fallback cleanup runs. Its private last-station snapshot has
+no directory identity, so that scenario makes no directory request.
 Neither needs Radio Browser, a public broadcast, physical speakers, or a desktop
 audio service. These checks do not establish that an audible output device works.
 

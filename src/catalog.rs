@@ -104,6 +104,10 @@ impl Catalog {
     }
 
     pub async fn resolve(&self, station: &Station) -> String {
+        if station.stationuuid.is_empty() {
+            // A saved stream without a directory identity has nothing to report.
+            return station.stream_url().into();
+        }
         #[derive(Deserialize)]
         struct Click {
             ok: bool,

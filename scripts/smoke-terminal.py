@@ -2,19 +2,24 @@
 """Exercise the built app in isolated Linux PTYs, without network or user state."""
 
 import argparse
+from contextlib import contextmanager
 import fcntl
 import math
+import json
 import os
 from pathlib import Path
 import pty
 import re
 import select
 import signal
+import shutil
+import subprocess
 import struct
 import sys
 import tempfile
 import termios
 import time
+import wave
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,8 +30,9 @@ class SmokeFailure(Exception):
 
 
 class Session:
-    def __init__(self, binary, state_home, timeout):
+    def __init__(self, binary, state_home, timeout, environment=None):
         self.pid = None
+        self.group_id = None
         self.fd = None
         self.returncode = None
         self.timeout = timeout
@@ -34,20 +40,23 @@ class Session:
         try:
             temporary = Path(state_home) / "tmp"
             temporary.mkdir(parents=True)
+            child_environment = dict(os.environ)
+            child_environment.update(environment or {})
+            child_environment.update(XDG_STATE_HOME=str(Path(state_home) / "state"),
+                                     TMPDIR=str(temporary), TERM="xterm-256color")
             self.fd, slave = pty.openpty()
             try:
                 # Capture the shell modes before the child can enable raw mode.
                 self.initial = termios.tcgetattr(slave)
                 fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
                 self.pid = os.fork()
+                if self.pid:
+                    self.group_id = self.pid
                 if self.pid == 0:
                     try:
                         os.close(self.fd)
                         os.login_tty(slave)
-                        os.execve(str(binary), [str(binary)],
-                                  dict(os.environ, XDG_STATE_HOME=str(Path(state_home) / "state"),
-                                       TMPDIR=str(temporary),
-                                       TERM="xterm-256color"))
+                        os.execve(str(binary), [str(binary)], child_environment)
                     except BaseException as error:
                         os.write(2, f"Cannot start smoke binary: {error}\n".encode())
                         os._exit(127)
@@ -148,16 +157,21 @@ class Session:
 
     def close(self):
         try:
+            # The leader may already be reaped while descendants still own its
+            # session. Retain that group identity independently of self.pid.
+            group = self.group_id or self.pid
+            if group is not None:
+                try:
+                    os.killpg(group, signal.SIGKILL)
+                except ProcessLookupError:
+                    if self.pid is not None:
+                        try:
+                            os.kill(self.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                self.group_id = None
             if self.pid is not None:
                 pid = self.pid
-                # Kill the owned session, including any children it spawned.
-                try:
-                    os.killpg(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    try:
-                        os.kill(pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
                 deadline = time.monotonic() + 2
                 while self.poll() is None:
                     if time.monotonic() >= deadline:
@@ -167,6 +181,65 @@ class Session:
             if self.fd is not None:
                 os.close(self.fd)
                 self.fd = None
+
+
+@contextmanager
+def local_audio(state_home):
+    """Serve silence and record the real null-output mpv owned by the app."""
+    directory = Path(state_home)
+    directory.mkdir()
+    with wave.open(str(directory / "silence.wav"), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(44100)
+        audio.writeframes(bytes(44100 * 2 * 20))
+    player = shutil.which("mpv")
+    if player is None:
+        raise SmokeFailure("local playback/quit requires mpv")
+    wrapper_directory = directory / "bin"
+    wrapper_directory.mkdir()
+    pid_file = directory / "player.pid"
+    wrapper = wrapper_directory / "mpv"
+    wrapper.write_text(
+        f"#!{sys.executable}\nimport os,pathlib,sys\n"
+        f"pathlib.Path({str(pid_file)!r}).write_text(str(os.getpid()))\n"
+        f"os.execv({player!r}, [{player!r}, '--ao=null', *sys.argv[1:]])\n"
+    )
+    wrapper.chmod(0o755)
+    # A separate server process keeps the PTY parent single-threaded at fork.
+    server = subprocess.Popen(
+        [sys.executable, "-u", "-c",
+         "import functools,http.server,sys\n"
+         "class Handler(http.server.SimpleHTTPRequestHandler):\n"
+         "    def log_message(self, *_): pass\n"
+         "server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), "
+         "functools.partial(Handler, directory=sys.argv[1]))\n"
+         "print(server.server_port, flush=True)\nserver.serve_forever()\n",
+         str(directory)], stdout=subprocess.PIPE, start_new_session=True,
+    )
+    try:
+        if not select.select([server.stdout], [], [], 5)[0]:
+            raise SmokeFailure("local audio server did not become ready within 5s")
+        port = server.stdout.readline().strip()
+        if not port.isdigit():
+            raise SmokeFailure("local audio server exited without a port")
+        saved = directory / "state" / "rmusic"
+        saved.mkdir(parents=True)
+        (saved / "state.json").write_text(json.dumps({
+            "version": 1, "volume": 50, "favorites": [],
+            "last_station": {"stationuuid": "", "name": "Local smoke station",
+                             "url": f"http://127.0.0.1:{int(port)}/silence.wav"},
+        }))
+        yield {"PATH": str(wrapper_directory) + os.pathsep + os.environ["PATH"]}, pid_file
+    finally:
+        if server.poll() is None:
+            server.terminate()
+            try:
+                server.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                server.kill()
+                server.wait(timeout=2)
+        server.stdout.close()
 
 
 def interrupted(signum, _frame):
@@ -214,6 +287,23 @@ def main():
             with Session(binary, state + "/" + name, options.timeout) as app:
                 app.exit(sig=sig)
             print(f"PASS: {name}, clean exit, terminal restoration", flush=True)
+
+        print("RUN: local playback and quit with an owned real player", flush=True)
+        playback_home = state + "/playback"
+        with local_audio(playback_home) as (environment, pid_file):
+            with Session(binary, playback_home, options.timeout, environment) as app:
+                app.send(b" ")
+                app.expect(lambda data: b"Playing" in data, "local audio playback")
+                player_pid = int(pid_file.read_text())
+                app.exit(key=b"q")
+                # Check before Session cleanup could kill and mask a leaked player.
+                try:
+                    os.kill(player_pid, 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    raise SmokeFailure(f"quit left owned player {player_pid} alive")
+        print("PASS: quit stopped and reaped the owned real mpv player", flush=True)
 
 
 if __name__ == "__main__":

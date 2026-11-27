@@ -521,6 +521,22 @@ async fn explicit_reporting_failure_falls_back_to_the_saved_stream_address() {
     assert!(request.await.unwrap().starts_with("GET /json/url/a "));
 }
 
+#[tokio::test]
+async fn saved_stream_without_directory_identity_does_not_contact_the_directory() {
+    let (server, request) = http_fixture(
+        "200 OK",
+        "{\"ok\":true,\"url\":\"https://unexpected.test/stream\"}".into(),
+    )
+    .await;
+    let catalog = crate::catalog::Catalog::with_servers(vec![server]).unwrap();
+    assert_eq!(
+        catalog.resolve(&station("")).await,
+        "https://example.test/live"
+    );
+    assert!(!request.is_finished());
+    request.abort();
+}
+
 #[test]
 fn entering_the_playing_station_is_a_noop_and_volume_is_app_only_and_bounded() {
     let mut app = App::new(
