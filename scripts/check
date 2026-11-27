@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
+
+if ! command -v cargo >/dev/null 2>&1; then
+    printf 'ERROR: cargo not found; install a stable Rust toolchain with rustfmt and clippy.\n' >&2
+    exit 127
+fi
+
+run_phase() {
+    local phase="$1"
+    shift
+    printf '\n==> %s\n' "$phase"
+    if "$@"; then
+        printf 'PASSED: %s\n' "$phase"
+    else
+        local status=$?
+        printf 'FAILED: %s (exit %s)\n' "$phase" "$status" >&2
+        return "$status"
+    fi
+}
+
+run_phase format cargo fmt --all -- --check
+run_phase check cargo check --workspace --all-targets --locked
+# Keep warning enforcement compatible with toolchains that predate Cargo's
+# build.warnings setting; the runner does not introduce a new Cargo minimum.
+run_phase clippy cargo clippy --workspace --all-targets --locked -- -D warnings
+run_phase test cargo test --workspace --locked

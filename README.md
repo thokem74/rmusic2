@@ -91,11 +91,30 @@ stream will play locally.
 ## Verify
 
 ```sh
-cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets
-cargo test --workspace
+./scripts/check
 ```
+
+Requires Bash and a stable Rust toolchain with rustfmt and Clippy. The runner
+selects this checkout's workspace root even when invoked from another directory.
+It checks formatting without rewriting files, compiles all workspace targets,
+runs Clippy with warnings treated as errors, and runs workspace tests. All
+dependency-consuming phases use `--locked`. A failed phase stops verification,
+identifies the phase, preserves Cargo's diagnostic, and returns its exit status.
+
+GitHub Actions is configured to run this same command on pushes and pull requests
+with stable Rust, rustfmt, and Clippy. CI also tests the runner itself; reproduce
+those checks with:
+
+```sh
+python3 scripts/test_check.py
+```
+
+The runner tests use temporary workspaces to reject real formatting, compilation,
+Clippy-warning, and behavior-test failures. They also check missing-tool errors,
+failure propagation, workspace selection, and source/lockfile preservation. Python 3
+is needed for these runner tests; the Cargo check command itself only needs Bash
+and the Rust tools. Branch protection and additional process-smoke automation are
+separate from this CI guardrail.
 
 Tests exercise application actions and visible state with controlled responses and
 time, real temporary-file persistence, and localhost HTTP fixtures. They do not

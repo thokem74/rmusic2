@@ -61,14 +61,16 @@ Follow the [official naming guidelines](https://rust-lang.github.io/api-guidelin
 
 ## Verification
 
-For Rust code changes, run the following from the Cargo workspace root:
+For Rust code changes, run the shared verification entry point:
 
 ```sh
-cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo clippy --workspace --all-targets
-cargo test --workspace
+./scripts/check
 ```
+
+It runs rustfmt in check mode, workspace/all-target compilation, workspace/all-target
+Clippy with warnings treated as errors, and workspace tests. Dependency-consuming
+phases use the committed lockfile. The script selects the workspace root, and CI
+uses the same entry point; keep the command sequence authoritative in `scripts/check`.
 
 - Follow configured lint levels and resolve warnings introduced by the change.
   Keep lint exceptions narrowly scoped and explain their reason. Consult
