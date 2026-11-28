@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Record observed Cargo/libtest outcomes, conservatively, in local evidence."""
+import argparse
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+
+
+class EvidenceError(Exception):
+    pass
+
+
+def save(path, record):
+    temporary = path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(record, indent=2) + '\n')
+    temporary.replace(path)
+
+
+def run(command, cwd, directory, attempt):
+    log = directory / f"{len(attempt['commands']) + 1}.log"
+    entry = {'argv': command, 'cwd': str(cwd), 'log': str(log)}
+    attempt['commands'].append(entry)
+    with log.open('w') as output:
+        output.write('$ ' + shlex.join(command) + '\n')
+        output.flush()
+        process = subprocess.Popen(command, cwd=cwd, stdout=output,
+                                   stderr=subprocess.STDOUT, start_new_session=True,
+                                   env={**os.environ, 'CARGO_TERM_COLOR': 'never'})
+        try:
+            entry['exit_status'] = process.wait()
+        except BaseException:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+            raise
+    return entry['exit_status'], log.read_text(errors='replace').split('\n', 1)[1]
+
+
+def observe(selection, directory, attempt):
+    manifest = Path(selection['manifest'])
+    code, output = run(['cargo', 'test', '--workspace', '--locked', '--no-run',
+                        '--message-format=json', '--manifest-path', str(manifest)],
+                       manifest.parent, directory, attempt)
+    if code != 0:
+        return 'build_failure', output
+    artifacts = {}
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if event.get('reason') == 'compiler-artifact' and event.get('profile', {}).get('test'):
+            if event.get('executable'):
+                key = event['package_id'] + ':' + ','.join(event['target']['kind']) + ':' + event['target']['name']
+                artifacts[key] = event
+    if not artifacts:
+        return 'infrastructure_failure', 'Cargo reported no executable test artifacts.'
+    names = []
+    failures = 0
+    diagnostics = []
+    for key, artifact in sorted(artifacts.items()):
+        command = [artifact['executable'], selection['filter'], '--format=pretty',
+                   '--color=never', '--test-threads=1']
+        if selection['exact']:
+            command.append('--exact')
+        code, output = run(command, Path(artifact['manifest_path']).parent, directory, attempt)
+        diagnostics.append(output)
+        summaries = re.findall(
+            r'^test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; '
+            r'(\d+) measured; (\d+) filtered out;.*$', output, re.M)
+        tests = re.findall(r'^test (\S+) \.\.\. (ok|FAILED|ignored(?:, [^\n]*)?)$', output, re.M)
+        if len(summaries) != 1:
+            return 'infrastructure_failure', output
+        result, passed, failed, ignored, measured, _ = summaries[0]
+        passed, failed, ignored, measured = map(int, (passed, failed, ignored, measured))
+        if (measured or len(tests) != passed + failed + ignored
+                or sum(status == 'ok' for _, status in tests) != passed
+                or sum(status == 'FAILED' for _, status in tests) != failed
+                or code != (101 if failed else 0)
+                or result != ('FAILED' if failed else 'ok')):
+            return 'infrastructure_failure', output
+        names.extend(key + ':' + name for name, status in tests if status in ('ok', 'FAILED'))
+        failures += failed
+    attempt['tests'] = sorted(names)
+    if not names:
+        return 'zero_tests', '\n'.join(diagnostics)
+    return ('test_failure' if failures else 'test_pass'), '\n'.join(diagnostics)
+
+
+def load(path):
+    try:
+        record = json.loads(path.read_text())
+        if (record['version'] != 1 or record['status'] not in
+                ('running', 'red_verified', 'green_verified', 'unverified', 'interrupted')
+                or not isinstance(record['attempts'], list)
+                or not isinstance(record['selection'], dict)
+                or any(not isinstance(attempt, dict) for attempt in record['attempts'])):
+            raise ValueError('invalid record structure')
+        return record
+    except (ValueError, KeyError, TypeError) as error:
+        raise EvidenceError(f'Malformed evidence; use reset explicitly: {path}') from error
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('phase', choices=['red', 'green', 'reset'])
+    parser.add_argument('slice', help='Explicit slice name (letters, digits, hyphens, underscores)')
+    parser.add_argument('filter', nargs='?')
+    parser.add_argument('--exact', action='store_true')
+    parser.add_argument('--manifest-path', default='Cargo.toml')
+    args = parser.parse_args()
+    if not re.fullmatch(r'[A-Za-z0-9_-]+', args.slice):
+        parser.error('invalid slice name')
+    if args.phase != 'reset' and (not args.filter or args.filter.startswith('-')):
+        parser.error('red/green require a nonempty test filter, not a runner option')
+    manifest = Path(args.manifest_path).resolve()
+    # Evidence belongs to the selected manifest, independent of the caller's cwd.
+    directory = manifest.parent / '.tdd-evidence' / args.slice
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / 'record.json'
+    with (directory / 'lock').open('w') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise EvidenceError('Slice is busy; wait for or stop its active command.') from error
+        if args.phase == 'reset':
+            # Archive even malformed/interrupted records and retain diagnostic logs.
+            if path.exists():
+                path.rename(directory / f'reset-{time.time_ns()}.json')
+            print(f'Reset slice {args.slice}; retained evidence: {directory}')
+            return 0
+        selection = {'manifest': str(manifest), 'filter': args.filter, 'exact': args.exact}
+        if args.phase == 'red':
+            if path.exists():
+                raise EvidenceError(f'Slice already has evidence; use reset explicitly: {path}')
+            record = {'version': 1, 'selection': selection, 'attempts': [], 'status': 'unverified'}
+        else:
+            if not path.exists():
+                raise EvidenceError('Missing verified red evidence; run red first.')
+            record = load(path)
+            if record['selection'] != selection:
+                raise EvidenceError('Selection mismatch; green must use the same manifest/filter/exact flag.')
+            if record['status'] != 'red_verified':
+                raise EvidenceError('No current verified red; reset interrupted/completed/unverified cycles.')
+            red = record['attempts'][0] if record['attempts'] else {}
+            if (red.get('phase') != 'red' or red.get('outcome') != 'test_failure'
+                    or not isinstance(red.get('tests'), list) or not red['tests']):
+                raise EvidenceError('Malformed red evidence; use reset explicitly.')
+        attempt = {'phase': args.phase, 'commands': [], 'outcome': 'running'}
+        record['attempts'].append(attempt)
+        record['status'] = 'running'
+        save(path, record)
+        logs = directory / f'run-{time.time_ns()}'
+        logs.mkdir()
+        try:
+            outcome, diagnostic = observe(selection, logs, attempt)
+        except KeyboardInterrupt:
+            outcome, diagnostic = 'interrupted', 'Command interrupted; reset the slice before restarting.'
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            outcome, diagnostic = 'infrastructure_failure', str(error)
+        attempt['outcome'] = outcome
+        attempt['diagnostic'] = diagnostic[-6000:]
+        verified = args.phase == 'red' and outcome == 'test_failure'
+        if args.phase == 'green':
+            if outcome == 'test_pass' and attempt.get('tests') != red['tests']:
+                attempt['outcome'] = outcome = 'test_set_mismatch'
+            verified = outcome == 'test_pass'
+        if verified:
+            record['status'] = args.phase + '_verified'
+        elif outcome == 'interrupted':
+            record['status'] = 'interrupted'
+        else:
+            record['status'] = 'red_verified' if args.phase == 'green' else 'unverified'
+        save(path, record)
+        print(f"{args.phase}: {outcome}; {record['status']}\nEvidence and complete logs: {directory}")
+        if not verified or args.phase == 'red':
+            print(attempt['diagnostic'])
+        return 0 if verified else 1
+
+
+def interrupt(_signum, _frame):
+    raise KeyboardInterrupt
+
+
+if __name__ == '__main__':
+    signal.signal(signal.SIGTERM, interrupt)
+    try:
+        sys.exit(main())
+    except (EvidenceError, OSError) as error:
+        print(f'ERROR: {error}', file=sys.stderr)
+        sys.exit(2)

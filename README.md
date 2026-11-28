@@ -90,6 +90,8 @@ stream will play locally.
 
 ## Verify
 
+For focused red/green cycles, see [behavioral TDD evidence](docs/tdd.md).
+
 ```sh
 ./scripts/check
 ```
