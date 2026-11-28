@@ -160,6 +160,23 @@ class TddTests(unittest.TestCase):
         self.assertIn('Malformed', result.stderr)
         self.assertEqual(path.read_text(), damaged)
 
+    def test_red_missing_commands_or_diagnostic_cannot_verify_green(self):
+        for field in ('commands', 'diagnostic'):
+            with self.subTest(field=field):
+                self.run_driver('reset')
+                self.write_behavior(False)
+                self.assertEqual(self.run_driver('red').returncode, 0)
+                path = self.root / '.tdd-evidence/answer/record.json'
+                record = self.record()
+                del record['attempts'][0][field]
+                damaged = json.dumps(record)
+                path.write_text(damaged)
+                self.write_behavior(True)
+                result = self.run_driver('green')
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertIn('Malformed', result.stderr)
+                self.assertEqual(path.read_text(), damaged)
+
     def test_abnormal_test_exit_is_infrastructure_failure(self):
         self.source.write_text('#[test] fn behavior() { std::process::exit(7); }')
         self.assertEqual(self.run_driver('red').returncode, 1)

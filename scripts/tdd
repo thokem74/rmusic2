@@ -150,8 +150,24 @@ def main():
                 raise EvidenceError('No current verified red; reset interrupted/completed/unverified cycles.')
             red = record['attempts'][0] if record['attempts'] else {}
             if (red.get('phase') != 'red' or red.get('outcome') != 'test_failure'
-                    or not isinstance(red.get('tests'), list) or not red['tests']):
+                    or not isinstance(red.get('tests'), list) or not red['tests']
+                    or any(not isinstance(name, str) or not name for name in red['tests'])
+                    or not isinstance(red.get('diagnostic'), str) or not red['diagnostic']
+                    or not isinstance(red.get('commands'), list) or len(red['commands']) < 2):
                 raise EvidenceError('Malformed red evidence; use reset explicitly.')
+            for command in red['commands']:
+                if (not isinstance(command, dict)
+                        or not isinstance(command.get('argv'), list) or not command['argv']
+                        or any(not isinstance(arg, str) for arg in command['argv'])
+                        or not isinstance(command.get('cwd'), str)
+                        or not isinstance(command.get('log'), str)
+                        or not Path(command['log']).is_file()
+                        or type(command.get('exit_status')) is not int
+                        or command['exit_status'] not in (0, 101)):
+                    raise EvidenceError('Malformed red command evidence; use reset explicitly.')
+            if (red['commands'][0]['exit_status'] != 0
+                    or not any(command['exit_status'] == 101 for command in red['commands'][1:])):
+                raise EvidenceError('Malformed red outcomes; use reset explicitly.')
         attempt = {'phase': args.phase, 'commands': [], 'outcome': 'running'}
         record['attempts'].append(attempt)
         record['status'] = 'running'
