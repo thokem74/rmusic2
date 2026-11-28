@@ -19,6 +19,8 @@ These policies apply throughout this repository.
 - Domain: before exploring behavior or proposing changes, read
   [domain guidance](docs/agents/domain.md). It routes to the glossary and relevant
   ADRs when present, and to [design](docs/design.md) for product/spec/implementation work.
+- Large issues/references not already in context: use [bounded context reads](docs/context.md)
+  to cache the source once and select excerpts.
 
 ## Verification
 

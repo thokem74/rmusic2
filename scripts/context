@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""Read bounded context from a locally cached Markdown snapshot."""
+import argparse
+from datetime import datetime, timezone
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+
+REPOSITORY = 'thokem74/rmusic2'
+
+
+class ContextError(Exception):
+    pass
+
+
+def digest(body):
+    return hashlib.sha256(body.encode('utf-8')).hexdigest()
+
+
+def write_private(directory, text, suffix):
+    descriptor, name = tempfile.mkstemp(prefix='source-', suffix=suffix, dir=directory)
+    with os.fdopen(descriptor, 'w', encoding='utf-8', newline='') as output:
+        output.write(text)
+    return Path(name)
+
+
+def identify(mode, source):
+    if mode == 'file':
+        return {'kind': 'file', 'source': str(Path(source).resolve())}
+    match = re.fullmatch(r'(?:#|thokem74/rmusic2#|https://github\.com/thokem74/rmusic2/issues/)?([1-9][0-9]*)', source)
+    if not match:
+        raise ContextError('Expected an issue number, #N, thokem74/rmusic2#N, or its GitHub issue URL.')
+    number = int(match[1])
+    return {'kind': 'issue', 'source': f'https://github.com/{REPOSITORY}/issues/{number}',
+            'number': number}
+
+
+def retrieve(identity):
+    if identity['kind'] == 'file':
+        return Path(identity['source']).read_bytes().decode('utf-8'), {}
+    try:
+        result = subprocess.run(['gh', 'issue', 'view', str(identity['number']), '--repo',
+                                 REPOSITORY, '--json', 'number,title,url,body'],
+                                capture_output=True, text=True, encoding='utf-8', timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ContextError('GitHub CLI could not run or timed out; no fresh source retrieved.') from error
+    if result.returncode:
+        # CLI diagnostics may contain credentials; do not echo or cache raw transport output.
+        raise ContextError(f'GitHub read failed (gh exit {result.returncode}); check authentication/network access. No fresh source retrieved.')
+    try:
+        issue = json.loads(result.stdout)
+        if (type(issue['number']) is not int or issue['number'] != identity['number']
+                or issue['url'] != identity['source']
+                or not isinstance(issue['title'], str) or not isinstance(issue['body'], str)):
+            raise ValueError('source identity or content mismatch')
+        return issue['body'], {'title': issue['title']}
+    except (ValueError, KeyError, TypeError) as error:
+        raise ContextError('Invalid GitHub response or target mismatch; no fresh source retrieved.') from error
+
+
+def snapshot(directory, identity, refresh):
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    record_path = directory / 'record.json'
+    with (directory / 'lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        if record_path.exists() and not refresh:
+            try:
+                record = json.loads(record_path.read_text(encoding='utf-8'))
+                if (type(record['version']) is not int or record['version'] != 1
+                        or record['identity'] != identity
+                        or not isinstance(record['body_file'], str)
+                        or not re.fullmatch(r'source-[a-z0-9_]+\.md', record['body_file'])
+                        or not isinstance(record['sha256'], str)
+                        or not re.fullmatch(r'[0-9a-f]{64}', record['sha256'])
+                        or not isinstance(record['retrieved'], str)
+                        or datetime.fromisoformat(record['retrieved']).utcoffset() is None
+                        or (identity['kind'] == 'issue' and not isinstance(record['title'], str))):
+                    raise ValueError('invalid snapshot metadata')
+                source = directory / record['body_file']
+                body = source.read_bytes().decode('utf-8')
+                if digest(body) != record['sha256']:
+                    raise ValueError('snapshot mismatch')
+                return record, source, body, 'cache hit (snapshot; use --refresh to update)'
+            except (ValueError, KeyError, TypeError, OSError) as error:
+                raise ContextError('Invalid cache; use --refresh explicitly to replace it.') from error
+        try:
+            body, metadata = retrieve(identity)
+        except (ContextError, OSError, UnicodeError) as error:
+            if record_path.exists():
+                raise ContextError(f'Retrieval failed; previous snapshot unchanged at {record_path}. {error}') from error
+            raise
+        record = {'version': 1, 'identity': identity,
+                  'retrieved': datetime.now(timezone.utc).isoformat(),
+                  'sha256': digest(body), **metadata}
+        source = write_private(directory, body, '.md')
+        record['body_file'] = source.name
+        temporary = write_private(directory, json.dumps(record, ensure_ascii=False) + '\n', '.json')
+        temporary.replace(record_path)
+        return record, source, body, 'refreshed' if refresh else 'retrieved'
+
+
+def section(body, selector):
+    lines = body.splitlines(keepends=True)
+    headings = []
+    fence = None
+    for index, line in enumerate(lines):
+        candidate = re.match(r'^ {0,3}(`{3,}|~{3,})(.*)$', line.rstrip('\r\n'))
+        if fence:
+            if (candidate and candidate[1][0] == fence[0]
+                    and len(candidate[1]) >= fence[1] and not candidate[2].strip()):
+                fence = None
+            continue
+        if candidate:
+            fence = (candidate[1][0], len(candidate[1]))
+            continue
+        heading = re.fullmatch(r' {0,3}(#{1,6})(?:[ \t]+(.*))?', line.rstrip('\r\n'))
+        if heading:
+            title = re.sub(r'[ \t]+#+[ \t]*$', '', ' ' + (heading[2] or '')).strip()
+            headings.append((index, len(heading[1]), title))
+    matches = [(index, depth) for index, depth, title in headings if title == selector]
+    if not matches:
+        raise ContextError('Section missing; inspect the full cached source for exact ATX heading text.')
+    if len(matches) != 1:
+        raise ContextError('Section ambiguous: heading occurs more than once; inspect the full cached source.')
+    start, depth = matches[0]
+    end = next((index for index, level, _ in headings if index > start and level <= depth), len(lines))
+    return ''.join(lines[start:end])
+
+
+def bounded(text, source, max_lines, max_bytes):
+    # Count the complete output, including the mandatory full-source pointer and marker.
+    text = '\n'.join(text.splitlines()) + '\n'
+    footer = f'Full source: {source}\n'
+    complete = text + footer
+    if len(complete.splitlines()) <= max_lines and len(complete.encode('utf-8')) <= max_bytes:
+        return complete
+    suffix = '[TRUNCATED: output limit reached; full cached source is unchanged.]\n' + footer
+    lines_left = max_lines - len(suffix.splitlines())
+    bytes_left = max_bytes - len(suffix.encode('utf-8'))
+    if lines_left < 0 or bytes_left < 0:
+        raise ContextError('Output budget cannot fit the full-source pointer; increase limits or use a shorter cache path.')
+    prefix = ''.join(text.splitlines(keepends=True)[:lines_left])
+    prefix = prefix.encode('utf-8')[:max(0, bytes_left - 1)].decode('utf-8', errors='ignore')
+    if prefix and not prefix.endswith('\n'):
+        prefix += '\n'
+    return prefix + suffix
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mode', choices=['file', 'issue'])
+    parser.add_argument('source')
+    parser.add_argument('--cache-dir', type=Path, default=Path(os.environ.get('RMUSIC_CONTEXT_CACHE') or
+                                                             Path(tempfile.gettempdir()) / f'rmusic-context-{os.getuid()}'))
+    parser.add_argument('--refresh', action='store_true')
+    display = parser.add_mutually_exclusive_group()
+    display.add_argument('--section')
+    display.add_argument('--excerpt', action='store_true', help='Show a bounded excerpt from the start')
+    parser.add_argument('--max-lines', type=int, default=80)
+    parser.add_argument('--max-bytes', type=int, default=8000)
+    args = parser.parse_args()
+    if not 3 <= args.max_lines <= 80 or not 256 <= args.max_bytes <= 8000:
+        raise ContextError('Limits must be 3..80 lines and 256..8000 UTF-8 bytes.')
+    identity = identify(args.mode, args.source)
+    key = digest(json.dumps(identity, sort_keys=True))
+    record, source, body, freshness = snapshot(args.cache_dir.resolve() / key, identity, args.refresh)
+    try:
+        excerpt = section(body, args.section) if args.section is not None else body if args.excerpt else ''
+    except ContextError as error:
+        raise ContextError(f'{error} Full source: {source}') from error
+    title = f"Issue: #{identity['number']} — {record['title']}\n" if args.mode == 'issue' else ''
+    text = (f"Source: {identity['source']}\nStatus: {freshness}\nRetrieved: {record['retrieved']}\n"
+            f"Length: {len(body.splitlines())} lines; {len(body)} characters; {len(body.encode('utf-8'))} UTF-8 bytes\n"
+            f"{title}")
+    if args.section is not None or args.excerpt:
+        text += '\n--- Excerpt ---\n' + excerpt
+    sys.stdout.write(bounded(text, source, args.max_lines, args.max_bytes))
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        sys.exit(main())
+    except (ContextError, OSError, UnicodeError) as error:
+        print(f'ERROR: {error}', file=sys.stderr)
+        sys.exit(1)
